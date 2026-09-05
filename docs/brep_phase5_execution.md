@@ -2,42 +2,41 @@
 
 ## Status
 
-Phase 5 — project-object contract and Rhino interoperability — is active from the accepted Phase 4 master checkpoint:
+Phase 5 — project-object contract and Rhino interoperability — is active.
+
+Accepted Phase 5A checkpoint:
 
 ```text
-75fbb88743a6c0fb1c01f9d8de43ce6054ee7246
-Merge pull request #29 from weaf/feature/brep-project-definition-editing
-Phase 4D: BRep project definition editing
+601a51ee811d2bbaae236a797b7e0cecd81075eb
+Merge pull request #30 from weaf/feature/brep-project-object-contract
+Phase 5A: BRep project-object contract
 ```
 
-Phase 5A — canonical project-object contract — is complete on:
+Active Phase 5B branch:
 
 ```text
-feature/brep-project-object-contract
+feature/brep-project-object-evaluation
 ```
-
-PR #30 is the Phase 5A merge vehicle. After it is merged, Phase 5B — native project-object evaluation — is the next active slice.
 
 The current implementation is the source of truth. `docs/brep_kernel_plan.md` provides the roadmap goal, while completed Phase 1–4 execution/status documents are historical evidence.
 
-## Reconciled starting point
+## Reconciled Phase 5 starting point
 
-The accepted BRep stack already provides three core project-object concepts:
+The accepted BRep stack provides the canonical project-object concepts:
 
 - `resultNodeId` is the canonical primary BRep feature;
 - `placement` is the kernel-neutral local/insertion coordinate system intended to map to a future Grasshopper Plane;
-- `metadata` carries explicit object type, classification and bounded custom string properties.
+- `metadata` carries explicit object type, classification and bounded custom string properties;
+- optional `projectObject` declares footprint, clearance-envelope and maintenance-envelope feature roles plus stable local connection/mounting/cable points.
 
-The current native evaluator:
+Before 5B, the native evaluator:
 
 - evaluates only the canonical `resultNodeId`;
 - returns one primary body with bounds/viewer mesh;
 - exports exact STEP for that primary result;
-- does not yet evaluate semantic auxiliary project outputs.
+- does not yet evaluate semantic auxiliary geometry outputs or return resolved project-object semantics.
 
 No `rhino3dm`, openNURBS, RhinoCommon, Rhino.Compute or Grasshopper runtime dependency exists in the application today.
-
-The missing Phase 5 project-object concepts after 5A are native auxiliary-output evaluation and the later Rhino/3DM interoperability proof.
 
 ## Phase 5 architecture locks
 
@@ -54,23 +53,21 @@ The missing Phase 5 project-object concepts after 5A are native auxiliary-output
 
 ## Additive v1 source compatibility
 
-Phase 5A adds an optional project-object output definition to the existing schema-version-1 project contract.
+Phase 5A added an optional project-object output definition to the existing schema-version-1 project contract.
 
-This is deliberately additive:
+This remains deliberately additive:
 
 - existing valid v1 projects without project-object outputs remain valid and normalize exactly as before;
 - no existing field changes meaning;
 - no existing ID is regenerated;
-- canonical package import/export continues to transport the complete normalized project snapshot;
-- AI complete-snapshot schemas accept and preserve the optional field before projects begin using it.
+- canonical package import/export transports the complete normalized project snapshot;
+- AI complete-snapshot schemas accept and preserve the optional field.
 
 A future breaking source-format change may introduce a new schema version, but optional Phase 5 semantic output declarations do not require one.
 
 ## 5A — Canonical project-object contract — complete
 
 ### Canonical role mapping
-
-The complete project-object contract is intentionally composed from existing and new canonical fields:
 
 ```text
 primary BRep               -> resultNodeId
@@ -79,76 +76,102 @@ object metadata            -> metadata
 auxiliary semantic outputs -> projectObject
 ```
 
-`projectObject` is optional. When present it may declare:
+`projectObject` may declare:
 
-- `footprintNodeId` — an existing feature node whose evaluated geometry is the footprint-role output;
-- `clearanceEnvelopeNodeId` — an existing feature node whose evaluated geometry is the clearance-role output;
-- `maintenanceEnvelopeNodeId` — an existing feature node whose evaluated geometry is the maintenance/access-role output;
-- `points` — bounded stable semantic local points.
+- `footprintNodeId`;
+- `clearanceEnvelopeNodeId`;
+- `maintenanceEnvelopeNodeId`;
+- bounded stable semantic local `points`.
 
-The geometry-role contract is semantic rather than kernel-topological. Phase 5A does not introduce curve/face-specific node types and does not claim that every current feature graph can produce an ideal planar footprint. Later node capabilities may improve the geometry that can be assigned to these roles without changing the role contract.
+Each point has stable ID, kind `connection | mounting | cable`, local mm position, optional unitless direction and optional label. Compatible published-parameter references are supported. The geometry roles are semantic node roles rather than kernel-topology IDs.
 
-### Semantic points
+5A also protects referenced parameters and role-assigned nodes from destructive Phase 4 authoring operations without hidden cascading rewrites.
 
-Each project-object point has:
+## 5B — Native project-object evaluation — active
 
-- stable `id`;
-- `kind`: `connection`, `mounting`, or `cable`;
-- local `position` as a three-scalar mm vector;
-- optional unitless `direction` vector;
-- optional human-readable `label`.
+### Result contract
 
-Point scalar values may use compatible published-parameter references under the same canonical unit rules as placement/features.
+A successful native evaluation gains one required kernel-neutral `projectObject` result alongside the existing primary result fields:
 
-Points are local component data. Future Rhino/Grasshopper mapping applies the project's placement plane when composing them into a project model.
+```text
+status / provider / projectId / resultNodeId
+bodies / bounds                 <- primary result remains authoritative
+projectObject
+  placement                     <- resolved insertion/local plane
+  metadata                      <- canonical object metadata when present
+  geometry
+    footprint                   <- evaluated role body when declared
+    clearanceEnvelope           <- evaluated role body when declared
+    maintenanceEnvelope         <- evaluated role body when declared
+  points[]                      <- resolved semantic local points
+warnings / exactExport
+```
 
-### Validation and normalization
+The separation is intentional:
 
-5A provides:
+- `bodies` and top-level `bounds` retain their accepted Phase 1–4 meaning for the primary `resultNodeId`;
+- auxiliary role geometry does not get appended to `bodies` and therefore cannot silently change the current browser viewer;
+- exact STEP remains the primary `resultNodeId` shape only;
+- future 3DM/Grasshopper interoperability consumes `projectObject` explicitly.
 
-- a maximum of 128 semantic points;
-- duplicate/invalid point-ID rejection;
-- unknown auxiliary-node-reference rejection;
-- `mm` unit validation for point positions;
-- `none` unit validation for point directions;
-- deterministic point ordering by stable ID;
-- omission of an empty `projectObject` block from canonical output;
-- preservation of accepted Phase 1–4 validation behavior.
+### Resolved semantic data
 
-### AI compatibility
+`projectObject.placement` contains resolved numeric `origin`, `xAxis`, `yAxis` and derived `zAxis` under the exact parameter values used for the geometry evaluation.
 
-The provider-visible complete BRep project schema accepts the optional project-object definition. AI structural diffing includes project-object changes as project-level source changes. No separate AI patch format is introduced.
+Semantic point positions/directions are resolved under the same parameter-value map. Metadata is the canonical source metadata and remains kernel neutral.
 
-### Phase 4 authoring compatibility
+A project without any declared `projectObject` roles/points still receives a project-object evaluation envelope containing resolved placement, optional metadata, empty `geometry`, and empty `points`. This gives downstream interoperability one stable result shape without changing the source schema.
 
-Published-parameter usage detection includes project-object point position/direction references, preserving Phase 4D's rule that referenced parameters cannot be deleted or have their unit changed while still referenced.
+### Native auxiliary geometry
 
-Node deletion also respects semantic project-object geometry references. A node assigned as footprint/clearance/maintenance cannot be deleted until the role is changed or cleared; no hidden role rewrite is permitted.
+The build123d/OCCT driver evaluates declared geometry-role node IDs through the same existing recursive `evaluate_node` DAG cache used for the primary result.
 
-### 5A non-goals
+A second cache stores tessellated evaluated-body payloads by stable node ID so a node used by the primary result or multiple semantic roles is tessellated at most once per sandbox evaluation.
 
-5A intentionally does not add:
+The geometry-role body contract reuses `BrepEvaluatedBody`:
 
-- native evaluation of auxiliary outputs;
-- 3DM export/import;
-- rhino3dm dependency;
+- stable Brepia node ID;
+- native bounds;
+- bounded viewer mesh.
+
+The result JSON may contain the same body payload under more than one semantic role when the source intentionally assigns one node to multiple roles. Overall sandbox output remains bounded by the existing output-size limit.
+
+### Sandbox trust boundary
+
+Native output remains untrusted until validated by the host.
+
+5B validation requires:
+
+- returned `projectId` and `resultNodeId` to match the normalized request;
+- the first primary body ID to remain the requested `resultNodeId`;
+- every primary and auxiliary body to satisfy the existing bounds/mesh limits;
+- each returned semantic geometry role to match exactly the node ID declared for that role;
+- no undeclared geometry role to appear;
+- resolved placement, metadata and semantic points to equal the deterministic host-side resolution of the normalized source and parameter values;
+- no unknown project-object result keys or geometry-role keys.
+
+A mismatch is `output_invalid`; no untrusted project-object result reaches the API response.
+
+### Provider/runtime versioning
+
+The repository-native build123d/OCCT driver increments its provider version from `0.1.0` to `0.2.0` for the expanded result contract. The pinned build123d/OCCT image and security posture are otherwise unchanged; the driver continues to be mounted read-only into the sandbox.
+
+### Exact STEP invariant
+
+`model.step` continues to be exported from the shape returned for `resultNodeId`. Auxiliary-role evaluation does not alter the exported shape or create implicit multi-output STEP behavior.
+
+### 5B non-goals
+
+Do not add in 5B:
+
+- direct project-object authoring UI;
+- browser rendering/toggling of auxiliary geometry;
+- multi-output STEP or new export formats;
+- 3DM/rhino3dm;
 - new BRep geometry node types;
-- new parameter value types;
-- project-object UI authoring;
 - Rhino.Compute;
-- Grasshopper schema/component generation;
-- placement transformation of local native preview geometry.
-
-## 5B — Native project-object evaluation — next
-
-Extend the existing isolated evaluator/result contract so one evaluation can provide:
-
-- primary BRep result;
-- declared auxiliary geometry-role results;
-- resolved semantic points;
-- resolved placement and metadata in a kernel-neutral project-object result.
-
-Auxiliary node evaluation must reuse the same feature cache/DAG evaluation and remain bounded. Exact primary STEP behavior must remain unchanged unless an explicitly separate multi-output export is added.
+- Grasshopper component/runtime work;
+- application of the placement plane as a local native-preview transform.
 
 ## 5C — Project-object authoring and AI product integration
 
@@ -178,19 +201,21 @@ Do not broaden 5D into a Grasshopper component/runtime; that is Phase 6+ work.
 
 ## Phase 5A acceptance closeout
 
-Phase 5A is accepted on the contract branch with the following evidence:
+Phase 5A was accepted and merged through PR #30. Quality Gates #367 and #368 passed; the slice had no new browser/native-execution product surface and therefore used contract/regression acceptance.
 
-1. Existing schema-v1 BRep projects without `projectObject` normalize identically to their Phase 4 representation.
-2. Existing nodes can be referenced as footprint, clearance and maintenance semantic outputs.
-3. Unknown semantic-output node references fail canonical validation before persistence/native execution.
-4. Semantic points have stable bounded IDs, supported kinds and deterministic ordering.
-5. Point position scalars accept literals or `mm` published parameters and reject incompatible units/missing parameters.
-6. Optional point direction accepts literals or unitless published parameters and rejects incompatible units/missing parameters.
-7. Duplicate semantic point IDs and excessive point counts fail closed.
-8. Phase 4D parameter usage protection includes semantic-point references.
-9. Phase 4C safe node deletion blocks nodes assigned to semantic project-object geometry roles with actionable explanation and no implicit role rewrite.
-10. Provider-visible AI BRep schemas accept the optional project-object definition and project diffs surface project-object changes.
-11. Existing native evaluation, viewer, STEP export, immutable revisions, canonical packages and ordinary OpenSCAD paths are unchanged by the 5A implementation.
-12. Quality Gate #367 passed tests, typecheck, lint, build and diff check on the accepted implementation head.
+## Phase 5B acceptance
 
-5A has no new browser or native-execution product surface, so its acceptance is intentionally contract/regression based rather than a manual browser checklist.
+5B is complete only when all of the following hold:
+
+1. A legacy BRep project with no declared semantic roles/points still evaluates successfully and returns primary `bodies`/`bounds` plus an empty project-object geometry/points envelope.
+2. Declared footprint, clearance-envelope and maintenance-envelope nodes are evaluated into bounded bodies carrying their exact stable Brepia node IDs.
+3. Semantic points resolve literals and published-parameter references under the exact current evaluation values.
+4. Resolved placement includes the same origin/xAxis/yAxis and derived zAxis already validated by the shared provider contract; metadata is preserved exactly.
+5. Top-level primary `bodies`, `bounds`, `resultNodeId` and existing browser viewer semantics remain unchanged when auxiliary roles are present.
+6. The exact STEP artifact remains derived only from `resultNodeId` and imports independently as before.
+7. A sandbox result with wrong project/result identity, undeclared/wrong role node, invalid auxiliary mesh, or tampered placement/metadata/point data fails closed as `output_invalid`.
+8. Auxiliary evaluation reuses the existing shape/body caches and remains inside the accepted sandbox output/time/resource limits.
+9. The repository-native smoke test proves primary geometry, semantic role bodies, resolved point data and exact STEP in one real build123d/OCCT sandbox run.
+10. Ordinary BRep projects still preview/export normally in the browser and OpenSCAD behavior remains unchanged.
+11. Repository tests/typecheck/lint/build/diff checks are green.
+12. Focused native/browser acceptance is recorded before merge.

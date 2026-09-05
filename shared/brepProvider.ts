@@ -3,8 +3,11 @@ import {
   BrepProjectError,
   normalizeBrepProject,
   type BrepProject,
+  type BrepProjectMetadata,
+  type BrepProjectObjectPointKind,
   type BrepProjectPlacement,
   type BrepScalar,
+  type BrepVector3,
 } from './brepProject';
 
 export const BREP_EVALUATION_MAX_BODY_COUNT = 64;
@@ -34,6 +37,14 @@ export type BrepResolvedPlacement = {
   zAxis: [number, number, number];
 };
 
+export type BrepResolvedProjectObjectPoint = {
+  id: string;
+  kind: BrepProjectObjectPointKind;
+  position: [number, number, number];
+  direction?: [number, number, number];
+  label?: string;
+};
+
 export type BrepProviderMetadata = {
   id: string;
   providerVersion: string;
@@ -61,6 +72,29 @@ export type BrepEvaluatedBody = {
   viewerMesh?: BrepViewerMesh;
 };
 
+export type BrepProjectObjectGeometryResult = {
+  footprint?: BrepEvaluatedBody;
+  clearanceEnvelope?: BrepEvaluatedBody;
+  maintenanceEnvelope?: BrepEvaluatedBody;
+};
+
+/**
+ * Kernel-neutral evaluated reusable-object contract. Primary geometry remains
+ * in bodies/resultNodeId; semantic auxiliary geometry is isolated here so
+ * existing viewer and exact STEP behavior keep their accepted meaning.
+ */
+export type BrepEvaluatedProjectObject = {
+  placement: BrepResolvedPlacement;
+  metadata?: BrepProjectMetadata;
+  geometry: BrepProjectObjectGeometryResult;
+  points: BrepResolvedProjectObjectPoint[];
+};
+
+export type BrepResolvedProjectObjectSemantics = Omit<
+  BrepEvaluatedProjectObject,
+  'geometry'
+>;
+
 export type BrepExactExportCapability = {
   format: 'step';
   available: boolean;
@@ -73,6 +107,7 @@ export type BrepEvaluationSuccess = {
   resultNodeId: string;
   bodies: BrepEvaluatedBody[];
   bounds: BrepBounds;
+  projectObject: BrepEvaluatedProjectObject;
   warnings: string[];
   exactExport: BrepExactExportCapability;
 };
@@ -143,7 +178,7 @@ function resolveScalar(
 }
 
 function resolveVector(
-  value: BrepProjectPlacement['origin'],
+  value: BrepVector3,
   parameterValues: Readonly<BrepParameterValues>,
 ): [number, number, number] {
   return [
@@ -207,6 +242,26 @@ export function resolveBrepProjectPlacement(
   }
 
   return { origin, xAxis, yAxis, zAxis };
+}
+
+/** Resolve non-kernel project-object data under the exact evaluation values. */
+export function resolveBrepProjectObjectSemantics(
+  project: BrepProject,
+  parameterValues: Readonly<BrepParameterValues>,
+): BrepResolvedProjectObjectSemantics {
+  return {
+    placement: resolveBrepProjectPlacement(project.placement, parameterValues),
+    ...(project.metadata ? { metadata: project.metadata } : {}),
+    points: (project.projectObject?.points ?? []).map((point) => ({
+      id: point.id,
+      kind: point.kind,
+      position: resolveVector(point.position, parameterValues),
+      ...(point.direction
+        ? { direction: resolveVector(point.direction, parameterValues) }
+        : {}),
+      ...(point.label ? { label: point.label } : {}),
+    })),
+  };
 }
 
 export function normalizeBrepEvaluationRequest(
@@ -279,7 +334,7 @@ export function normalizeBrepEvaluationRequest(
     parameterValues[parameter.id] = normalized;
   }
 
-  resolveBrepProjectPlacement(project.placement, parameterValues);
+  resolveBrepProjectObjectSemantics(project, parameterValues);
 
   return { project, parameterValues };
 }

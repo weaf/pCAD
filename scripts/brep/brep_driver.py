@@ -5,13 +5,38 @@ from pathlib import Path
 
 from build123d import Box, Cylinder, Location, export_step
 
-PROVIDER = {"id": "build123d-occt", "providerVersion": "0.1.0", "kernelVersion": "build123d-0.11.1/OCCT-7.9.3.1"}
+PROVIDER = {"id": "build123d-occt", "providerVersion": "0.2.0", "kernelVersion": "build123d-0.11.1/OCCT-7.9.3.1"}
 
 def scalar(value, parameters):
     return parameters[value["parameter"]] if isinstance(value, dict) else value
 
 def vector(value, parameters):
     return tuple(scalar(item, parameters) for item in value)
+
+def cross(left, right):
+    return (
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    )
+
+def resolved_placement(placement, parameters):
+    origin = vector(placement["origin"], parameters)
+    x_axis = vector(placement["xAxis"], parameters)
+    y_axis = vector(placement["yAxis"], parameters)
+    return {"origin": origin, "xAxis": x_axis, "yAxis": y_axis, "zAxis": cross(x_axis, y_axis)}
+
+def resolved_point(point, parameters):
+    result = {
+        "id": point["id"],
+        "kind": point["kind"],
+        "position": vector(point["position"], parameters),
+    }
+    if "direction" in point:
+        result["direction"] = vector(point["direction"], parameters)
+    if "label" in point:
+        result["label"] = point["label"]
+    return result
 
 def bounds(shape):
     box = shape.bounding_box()
@@ -41,6 +66,7 @@ def evaluate(request):
     project = request["project"]
     parameters = request["parameterValues"]
     shapes = {}
+    body_payloads = {}
     nodes = {node["id"]: node for node in project["nodes"]}
 
     def evaluate_node(node_id):
@@ -65,10 +91,49 @@ def evaluate(request):
         shapes[node_id] = shape
         return shape
 
+    def evaluated_body(node_id):
+        if node_id in body_payloads:
+            return body_payloads[node_id]
+        shape = evaluate_node(node_id)
+        payload = {"id": node_id, "bounds": bounds(shape), "viewerMesh": mesh(shape, node_id)}
+        body_payloads[node_id] = payload
+        return payload
+
     result_id = project["resultNodeId"]
     result = evaluate_node(result_id)
-    result_bounds = bounds(result)
-    return result, {"status": "success", "provider": PROVIDER, "projectId": project["id"], "resultNodeId": result_id, "bodies": [{"id": result_id, "bounds": result_bounds, "viewerMesh": mesh(result, result_id)}], "bounds": result_bounds, "warnings": [], "exactExport": {"format": "step", "available": True}}
+    primary_body = evaluated_body(result_id)
+
+    definition = project.get("projectObject") or {}
+    geometry = {}
+    role_fields = (
+        ("footprint", "footprintNodeId"),
+        ("clearanceEnvelope", "clearanceEnvelopeNodeId"),
+        ("maintenanceEnvelope", "maintenanceEnvelopeNodeId"),
+    )
+    for role, field in role_fields:
+        node_id = definition.get(field)
+        if node_id:
+            geometry[role] = evaluated_body(node_id)
+
+    project_object = {
+        "placement": resolved_placement(project["placement"], parameters),
+        "geometry": geometry,
+        "points": [resolved_point(point, parameters) for point in definition.get("points", [])],
+    }
+    if "metadata" in project:
+        project_object["metadata"] = project["metadata"]
+
+    return result, {
+        "status": "success",
+        "provider": PROVIDER,
+        "projectId": project["id"],
+        "resultNodeId": result_id,
+        "bodies": [primary_body],
+        "bounds": primary_body["bounds"],
+        "projectObject": project_object,
+        "warnings": [],
+        "exactExport": {"format": "step", "available": True},
+    }
 
 if __name__ == "__main__":
     try:

@@ -8,6 +8,8 @@ import {
   BREP_EVALUATION_MAX_VIEWER_TRIANGLES,
   BREP_EVALUATION_MAX_VIEWER_VERTICES,
   normalizeBrepEvaluationRequest,
+  resolveBrepProjectObjectSemantics,
+  type BrepEvaluatedBody,
   type BrepEvaluationResult,
   type BrepEvaluationSuccess,
   type BrepParameterValues,
@@ -81,6 +83,10 @@ function throwIfEvaluationAborted(signal?: AbortSignal): void {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function finiteVector(value: unknown): value is [number, number, number] {
   return (
     Array.isArray(value) &&
@@ -89,46 +95,127 @@ function finiteVector(value: unknown): value is [number, number, number] {
   );
 }
 
-function validSuccess(value: unknown): value is BrepEvaluationSuccess {
-  if (!value || typeof value !== 'object') return false;
-  const result = value as BrepEvaluationSuccess;
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => valuesEqual(item, right[index]))
+    );
+  }
+  if (isRecord(left) || isRecord(right)) {
+    if (!isRecord(left) || !isRecord(right)) return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return (
+      valuesEqual(leftKeys, rightKeys) &&
+      leftKeys.every((key) => valuesEqual(left[key], right[key]))
+    );
+  }
+  return false;
+}
+
+function validEvaluatedBody(value: unknown): value is BrepEvaluatedBody {
+  if (!isRecord(value)) return false;
+  const body = value as unknown as BrepEvaluatedBody;
+  if (
+    typeof body.id !== 'string' ||
+    !finiteVector(body.bounds?.min) ||
+    !finiteVector(body.bounds?.max)
+  )
+    return false;
+  const mesh = body.viewerMesh;
+  return (
+    !mesh ||
+    (mesh.bodyId === body.id &&
+      Array.isArray(mesh.positions) &&
+      Array.isArray(mesh.normals) &&
+      Array.isArray(mesh.indices) &&
+      mesh.positions.length / 3 <= BREP_EVALUATION_MAX_VIEWER_VERTICES &&
+      mesh.normals.length === mesh.positions.length &&
+      mesh.indices.length / 3 <= BREP_EVALUATION_MAX_VIEWER_TRIANGLES &&
+      mesh.positions.every(Number.isFinite) &&
+      mesh.normals.every(Number.isFinite) &&
+      mesh.indices.every(
+        (index) =>
+          Number.isInteger(index) &&
+          index >= 0 &&
+          index < mesh.positions.length / 3,
+      ))
+  );
+}
+
+function validProjectObjectResult(
+  value: unknown,
+  request: NormalizedBrepEvaluationRequest,
+): boolean {
+  if (!isRecord(value)) return false;
+  const allowedKeys = new Set(['placement', 'metadata', 'geometry', 'points']);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+
+  const expected = resolveBrepProjectObjectSemantics(
+    request.project,
+    request.parameterValues,
+  );
+  if (!valuesEqual(value.placement, expected.placement)) return false;
+  if (!valuesEqual(value.metadata, expected.metadata)) return false;
+  if (!valuesEqual(value.points, expected.points)) return false;
+  if (!isRecord(value.geometry)) return false;
+
+  const allowedGeometryKeys = new Set([
+    'footprint',
+    'clearanceEnvelope',
+    'maintenanceEnvelope',
+  ]);
+  if (
+    Object.keys(value.geometry).some((key) => !allowedGeometryKeys.has(key))
+  )
+    return false;
+
+  const rolePairs = [
+    ['footprint', request.project.projectObject?.footprintNodeId],
+    [
+      'clearanceEnvelope',
+      request.project.projectObject?.clearanceEnvelopeNodeId,
+    ],
+    [
+      'maintenanceEnvelope',
+      request.project.projectObject?.maintenanceEnvelopeNodeId,
+    ],
+  ] as const;
+  for (const [role, expectedNodeId] of rolePairs) {
+    const body = value.geometry[role];
+    if (!expectedNodeId) {
+      if (body != null) return false;
+      continue;
+    }
+    if (!validEvaluatedBody(body) || body.id !== expectedNodeId) return false;
+  }
+  return true;
+}
+
+function validSuccess(
+  value: unknown,
+  request: NormalizedBrepEvaluationRequest,
+): value is BrepEvaluationSuccess {
+  if (!isRecord(value)) return false;
+  const result = value as unknown as BrepEvaluationSuccess;
   if (
     result.status !== 'success' ||
+    result.projectId !== request.project.id ||
+    result.resultNodeId !== request.project.resultNodeId ||
     !Array.isArray(result.bodies) ||
     result.bodies.length < 1 ||
     result.bodies.length > BREP_EVALUATION_MAX_BODY_COUNT ||
+    result.bodies[0]?.id !== request.project.resultNodeId ||
     !finiteVector(result.bounds?.min) ||
-    !finiteVector(result.bounds?.max)
+    !finiteVector(result.bounds?.max) ||
+    !validProjectObjectResult(result.projectObject, request)
   )
     return false;
-  return result.bodies.every((body) => {
-    if (
-      !body ||
-      typeof body.id !== 'string' ||
-      !finiteVector(body.bounds?.min) ||
-      !finiteVector(body.bounds?.max)
-    )
-      return false;
-    const mesh = body.viewerMesh;
-    return (
-      !mesh ||
-      (mesh.bodyId === body.id &&
-        Array.isArray(mesh.positions) &&
-        Array.isArray(mesh.normals) &&
-        Array.isArray(mesh.indices) &&
-        mesh.positions.length / 3 <= BREP_EVALUATION_MAX_VIEWER_VERTICES &&
-        mesh.normals.length === mesh.positions.length &&
-        mesh.indices.length / 3 <= BREP_EVALUATION_MAX_VIEWER_TRIANGLES &&
-        mesh.positions.every(Number.isFinite) &&
-        mesh.normals.every(Number.isFinite) &&
-        mesh.indices.every(
-          (index) =>
-            Number.isInteger(index) &&
-            index >= 0 &&
-            index < mesh.positions.length / 3,
-        ))
-    );
-  });
+  return result.bodies.every(validEvaluatedBody);
 }
 
 export type BrepEvaluationArtifact = {
@@ -250,7 +337,7 @@ export async function evaluateNormalizedBrepProject(
         'BRep sandbox result exceeds the output limit.',
       );
     const parsed: unknown = JSON.parse(await readFile(resultPath, 'utf8'));
-    if (!validSuccess(parsed))
+    if (!validSuccess(parsed, request))
       throw new BrepEvaluationError(
         'output_invalid',
         'BRep sandbox produced an invalid result contract.',

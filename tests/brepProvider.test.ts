@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BrepEvaluationRequestError,
   normalizeBrepEvaluationRequest,
+  resolveBrepProjectObjectSemantics,
   resolveBrepProjectPlacement,
   type BrepEvaluationSuccess,
 } from '../shared/brepProvider';
@@ -114,6 +115,51 @@ describe('BRep provider contract', () => {
     });
   });
 
+  it('resolves semantic project-object points under current parameter overrides', () => {
+    const source = project();
+    source.metadata = { objectType: 'cabinet', classification: 'equipment' };
+    source.projectObject = {
+      footprintNodeId: 'body',
+      points: [
+        {
+          id: 'cableEntry',
+          kind: 'cable',
+          label: 'Cable entry',
+          position: [{ parameter: 'width' }, 25, 0],
+          direction: [0, 0, 1],
+        },
+      ],
+    };
+    const normalized = normalizeBrepEvaluationRequest({
+      project: source,
+      parameterValues: { width: 1500 },
+    });
+
+    expect(
+      resolveBrepProjectObjectSemantics(
+        normalized.project,
+        normalized.parameterValues,
+      ),
+    ).toEqual({
+      placement: {
+        origin: [0, 0, 0],
+        xAxis: [1, 0, 0],
+        yAxis: [0, 1, 0],
+        zAxis: [0, 0, 1],
+      },
+      metadata: { objectType: 'cabinet', classification: 'equipment' },
+      points: [
+        {
+          id: 'cableEntry',
+          kind: 'cable',
+          label: 'Cable entry',
+          position: [1500, 25, 0],
+          direction: [0, 0, 1],
+        },
+      ],
+    });
+  });
+
   it('rejects zero-length and collinear placement axes before provider execution', () => {
     const zeroAxis = project();
     zeroAxis.placement.xAxis = [0, 0, 0];
@@ -161,16 +207,27 @@ describe('BRep provider contract', () => {
       status: 'success',
       provider: {
         id: 'build123d-occt',
-        providerVersion: '0.1.0',
+        providerVersion: '0.2.0',
         kernelVersion: 'OCCT-7.8',
       },
       projectId: 'cabinetA42',
       resultNodeId: 'body',
       bodies: [{ id: 'body', bounds: { min: [0, 0, 0], max: [1, 1, 1] } }],
       bounds: { min: [0, 0, 0], max: [1, 1, 1] },
+      projectObject: {
+        placement: {
+          origin: [0, 0, 0],
+          xAxis: [1, 0, 0],
+          yAxis: [0, 1, 0],
+          zAxis: [0, 0, 1],
+        },
+        geometry: {},
+        points: [],
+      },
       warnings: [],
       exactExport: { format: 'step', available: true },
     };
     expect(result.bodies[0].id).toBe('body');
+    expect(result.projectObject.geometry).toEqual({});
   });
 });
